@@ -6,42 +6,69 @@ import base64
 import json
 import jwt
 import datetime
+import sqlite3
+import os
 
 hostName = "localhost"
 serverPort = 8080
-
-private_key = rsa.generate_private_key(
-    public_exponent=65537,
-    key_size=2048,
-)
-expired_key = rsa.generate_private_key(
-    public_exponent=65537,
-    key_size=2048,
-)
-
-pem = private_key.private_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.TraditionalOpenSSL,
-    encryption_algorithm=serialization.NoEncryption()
-)
-expired_pem = expired_key.private_bytes(
-    encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.TraditionalOpenSSL,
-    encryption_algorithm=serialization.NoEncryption()
-)
-
-numbers = private_key.private_numbers()
-
+DB_FILE = "totally_not_my_privateKeys.db"
 
 def int_to_base64(value):
-    """Convert an integer to a Base64URL-encoded string"""
     value_hex = format(value, 'x')
-    # Ensure even length
     if len(value_hex) % 2 == 1:
         value_hex = '0' + value_hex
     value_bytes = bytes.fromhex(value_hex)
-    encoded = base64.urlsafe_b64encode(value_bytes).rstrip(b'=')
-    return encoded.decode('utf-8')
+    return base64.urlsafe_b64encode(value_bytes).rstrip(b'=').decode('utf-8')
+
+
+def serialize_key(key_obj):
+    return key_obj.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption()
+    ).decode('utf-8')
+
+
+def deserialize_key(pem_str):
+    return serialization.load_pem_private_key(
+        pem_str.encode('utf-8'),
+        password=None
+    )
+
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS keys (
+        kid INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL,
+        exp INTEGER NOT NULL
+    )
+    """)
+
+    # Check if keys exist already
+    cursor.execute("SELECT COUNT(*) FROM keys")
+    count = cursor.fetchone()[0]
+
+    if count == 0:
+        print("Generating and inserting initial keys...")
+
+        # Generate a valid key
+        valid_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        valid_exp = int((datetime.datetime.utcnow() + datetime.timedelta(hours=1)).timestamp())
+        valid_pem = serialize_key(valid_key)
+        cursor.execute("INSERT INTO keys (key, exp) VALUES (?, ?)", (valid_pem, valid_exp))
+
+        # Generate an expired key
+        expired_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        expired_exp = int((datetime.datetime.utcnow() - datetime.timedelta(hours=1)).timestamp())
+        expired_pem = serialize_key(expired_key)
+        cursor.execute("INSERT INTO keys (key, exp) VALUES (?, ?)", (expired_pem, expired_exp))
+
+        conn.commit()
+
+    conn.close()
 
 
 class MyServer(BaseHTTPRequestHandler):
