@@ -97,74 +97,57 @@ def get_valid_keys_from_db():
     return [deserialize_key(r[0]) for r in rows]
 
 class MyServer(BaseHTTPRequestHandler):
-    def do_PUT(self):
-        self.send_response(405)
+    def _send_json(self, status, data):
+        self.send_response(status)
+        self.send_header("Content-type", "application/json")
         self.end_headers()
-        return
-
-    def do_PATCH(self):
-        self.send_response(405)
-        self.end_headers()
-        return
-
-    def do_DELETE(self):
-        self.send_response(405)
-        self.end_headers()
-        return
-
-    def do_HEAD(self):
-        self.send_response(405)
-        self.end_headers()
-        return
+        self.wfile.write(bytes(json.dumps(data), "utf-8"))
 
     def do_POST(self):
-        parsed_path = urlparse(self.path)
-        params = parse_qs(parsed_path.query)
-        if parsed_path.path == "/auth":
-            headers = {
-                "kid": "goodKID"
-            }
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
+
+        if parsed.path == "/auth":
+            expired_flag = 'expired' in params
+            key_obj, exp_ts = get_key_from_db(expired=expired_flag)
+
+            if not key_obj:
+                self._send_json(404, {"error": "No key found"})
+                return
+
+            headers = {"kid": "expiredKID" if expired_flag else "goodKID"}
             token_payload = {
                 "user": "username",
-                "exp": datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+                "exp": exp_ts
             }
-            if 'expired' in params:
-                headers["kid"] = "expiredKID"
-                token_payload["exp"] = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
+
+            pem = serialize_key(key_obj)
             encoded_jwt = jwt.encode(token_payload, pem, algorithm="RS256", headers=headers)
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(bytes(encoded_jwt, "utf-8"))
+            self._send_json(200, {"token": encoded_jwt})
             return
 
         self.send_response(405)
         self.end_headers()
-        return
 
     def do_GET(self):
         if self.path == "/.well-known/jwks.json":
-            self.send_response(200)
-            self.send_header("Content-type", "application/json")
-            self.end_headers()
-            keys = {
-                "keys": [
-                    {
-                        "alg": "RS256",
-                        "kty": "RSA",
-                        "use": "sig",
-                        "kid": "goodKID",
-                        "n": int_to_base64(numbers.public_numbers.n),
-                        "e": int_to_base64(numbers.public_numbers.e),
-                    }
-                ]
-            }
-            self.wfile.write(bytes(json.dumps(keys), "utf-8"))
+            keys = []
+            valid_keys = get_valid_keys_from_db()
+            for key_obj in valid_keys:
+                public_numbers = key_obj.public_key().public_numbers()
+                keys.append({
+                    "alg": "RS256",
+                    "kty": "RSA",
+                    "use": "sig",
+                    "kid": "goodKID",
+                    "n": int_to_base64(public_numbers.n),
+                    "e": int_to_base64(public_numbers.e)
+                })
+            self._send_json(200, {"keys": keys})
             return
 
         self.send_response(405)
         self.end_headers()
-        return
-
 
 if __name__ == "__main__":
     webServer = HTTPServer((hostName, serverPort), MyServer)
