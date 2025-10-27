@@ -47,20 +47,20 @@ def init_db():
     )
     """)
 
-    # Check if keys exist already
+    
     cursor.execute("SELECT COUNT(*) FROM keys")
     count = cursor.fetchone()[0]
 
     if count == 0:
         print("Generating and inserting initial keys...")
 
-        # Generate a valid key
+        
         valid_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         valid_exp = int((datetime.datetime.utcnow() + datetime.timedelta(hours=1)).timestamp())
         valid_pem = serialize_key(valid_key)
         cursor.execute("INSERT INTO keys (key, exp) VALUES (?, ?)", (valid_pem, valid_exp))
 
-        # Generate an expired key
+        
         expired_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         expired_exp = int((datetime.datetime.utcnow() - datetime.timedelta(hours=1)).timestamp())
         expired_pem = serialize_key(expired_key)
@@ -70,6 +70,31 @@ def init_db():
 
     conn.close()
 
+def get_key_from_db(expired=False):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    now = int(datetime.datetime.utcnow().timestamp())
+
+    if expired:
+        cursor.execute("SELECT key, exp FROM keys WHERE exp <= ? ORDER BY exp ASC LIMIT 1", (now,))
+    else:
+        cursor.execute("SELECT key, exp FROM keys WHERE exp > ? ORDER BY exp ASC LIMIT 1", (now,))
+
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return deserialize_key(row[0]), row[1]
+    return None, None
+
+
+def get_valid_keys_from_db():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    now = int(datetime.datetime.utcnow().timestamp())
+    cursor.execute("SELECT key, exp FROM keys WHERE exp > ?", (now,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [deserialize_key(r[0]) for r in rows]
 
 class MyServer(BaseHTTPRequestHandler):
     def do_PUT(self):
