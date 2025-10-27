@@ -150,10 +150,13 @@ class MyServer(BaseHTTPRequestHandler):
         self.end_headers()
 
 if __name__ == "__main__":
+    if not os.path.exists(DB_FILE):
+        print("Initializing new key database...")
+    init_db()
+    print(f"Starting JWKS server at http://{hostName}:{serverPort}")
     webServer = HTTPServer((hostName, serverPort), MyServer)
     try:
         webServer.serve_forever()
     except KeyboardInterrupt:
         pass
-
     webServer.server_close()
